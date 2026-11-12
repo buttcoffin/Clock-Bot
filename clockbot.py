@@ -31,6 +31,11 @@ MAX_DELAY_SEC = int(os.getenv("MAX_DELAY_SEC", "600"))
 PAGE_TIMEOUT_SEC = int(os.getenv("PAGE_TIMEOUT_SEC", "45"))
 CHROMIUM_PATH = os.getenv("CHROMIUM_PATH", "/usr/bin/chromium")
 CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
+
+# Set by controller.py: exact time (epoch seconds) to click Punch. When set, the
+# random MAX_DELAY_SEC wait is skipped and the bot waits on the punch page instead.
+PUNCH_AT = float(os.getenv("PUNCH_AT", "0") or 0)
+LAST_PUNCH_FILE = os.path.join(BASE, "last_punch")
 SE_OFFLINE = os.getenv("SE_OFFLINE", "false").lower() == "true"
 
 sys.stdout = open(os.path.join(BASE, "punch.log"), 'a', buffering=1)
@@ -95,7 +100,7 @@ def run_punch():
 
     if SE_OFFLINE:
         print("WARNING: SE_OFFLINE is true.\nThis is a dry run.")
-    else:
+    elif not PUNCH_AT:
         delay = random.randint(1, MAX_DELAY_SEC) if MAX_DELAY_SEC > 0 else 0
         time.sleep(delay)
     
@@ -156,6 +161,13 @@ def run_punch():
         #print("Opening content frame..")
         wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "ContentFrame")))
 
+        if PUNCH_AT:
+            wait.until(EC.element_to_be_clickable((By.ID, "btnPunch")))
+            remaining = PUNCH_AT - time.time()
+            if remaining > 0:
+                print(f"Ready. Punching at {datetime.fromtimestamp(PUNCH_AT).strftime('%-I:%M:%S %p')}")
+                time.sleep(remaining)
+
         for attempt in range(3):
             try:
                 punch_btn = wait.until(EC.element_to_be_clickable((By.ID, "btnPunch")))
@@ -164,6 +176,8 @@ def run_punch():
                     print("SE_OFFLINE ACTIVE\nSafely skipping the final punch.")
                 else:
                     punch_btn.click()
+                    with open(LAST_PUNCH_FILE, "w") as f:
+                        f.write(str(time.time()))
                     punch_time = datetime.now().strftime("%-I:%M %p")
                     print(f"✅ CLOCK PUNCHED AT {punch_time}!")
                 break

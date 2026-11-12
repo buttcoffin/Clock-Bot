@@ -1,0 +1,14 @@
+[Unit]
+Description=Clock-bot e-Paper display
+After=multi-user.target
+
+[Service]
+User=user
+WorkingDirectory=/home/user/clock-bot
+ExecStartPre=/bin/sleep 15
+ExecStart=/home/user/clock-bot/venv/bin/python /home/user/clock-bot/eink_monitor.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

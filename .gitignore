@@ -5,3 +5,9 @@ state.json
 state.json.tmp
 punch.log
 __pycache__/
+last_punch
+.env.bak*
+*.bak
+logo.png
+crash_screen.png
+frame_source.html

@@ -26,6 +26,11 @@ if ! command -v swig &> /dev/null || ! command -v unzip &> /dev/null; then
     MISSING_PACKAGES+="swig build-essential python3-dev wget unzip "
 fi
 
+# wget is needed for the Waveshare driver download
+if ! command -v wget &> /dev/null && [[ "$MISSING_PACKAGES" != *wget* ]]; then
+    MISSING_PACKAGES+="wget "
+fi
+
 # Install missing apt packages if necessary
 if [ -n "$MISSING_PACKAGES" ]; then
     echo "Missing required apt packages: $MISSING_PACKAGES"
@@ -70,5 +75,22 @@ source venv/bin/activate
 
 echo "Installing Python packages from requirements.txt..."
 pip install -r requirements.txt
+
+# Waveshare e-Paper driver: fetch only the 3 files this project uses
+# instead of pip-cloning Waveshare's entire (very large) repository.
+WAVESHARE_REF="${WAVESHARE_REF:-master}"
+WAVESHARE_URL="https://raw.githubusercontent.com/waveshareteam/e-Paper/${WAVESHARE_REF}/RaspberryPi_JetsonNano/python/lib/waveshare_epd"
+EPD_DIR="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/waveshare_epd"
+
+if [ -f "$EPD_DIR/epd2in13_V3.py" ]; then
+    echo "Waveshare e-Paper driver already installed."
+else
+    echo "Downloading Waveshare e-Paper driver (3 files)..."
+    mkdir -p "$EPD_DIR"
+    for f in __init__.py epdconfig.py epd2in13_V3.py; do
+        wget -q -O "$EPD_DIR/$f" "$WAVESHARE_URL/$f" || { rm -rf "$EPD_DIR"; echo "Failed to download $f"; exit 1; }
+    done
+    echo "Waveshare driver installed to $EPD_DIR"
+fi
 
 echo "Build complete. Run 'source venv/bin/activate' to use it."
