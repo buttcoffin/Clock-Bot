@@ -20,7 +20,17 @@ CLOCK_PASS = os.getenv("CLOCK_PASS")
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 
-IMAP_SERVER = "imap.gmail.com"
+IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
+MFA_SUBJECT = os.getenv("MFA_SUBJECT", "SMSFW")
+
+CLOCK_URL = os.getenv("CLOCK_URL", "https://timeclock.com")
+COMPANY_LINK_TEXT = os.getenv("COMPANY_LINK_TEXT", "My Company")
+FAVORITE_ID = os.getenv("FAVORITE_ID", "FAVORITE_1")
+
+MAX_DELAY_SEC = int(os.getenv("MAX_DELAY_SEC", "600"))
+PAGE_TIMEOUT_SEC = int(os.getenv("PAGE_TIMEOUT_SEC", "45"))
+CHROMIUM_PATH = os.getenv("CHROMIUM_PATH", "/usr/bin/chromium")
+CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
 SE_OFFLINE = os.getenv("SE_OFFLINE", "false").lower() == "true"
 
 sys.stdout = open(os.path.join(BASE, "punch.log"), 'a', buffering=1)
@@ -40,7 +50,7 @@ def get_mfa_code():
             mail.select('INBOX')
 
             # 2. Fixed search syntax by separating arguments and dropping outer parentheses
-            status, messages = mail.search(None, 'UNSEEN', 'SUBJECT', '"SMSFW"')
+            status, messages = mail.search(None, 'UNSEEN', 'SUBJECT', f'"{MFA_SUBJECT}"')
 
             if messages[0]:
                 current_ids = messages[0].split()
@@ -86,23 +96,23 @@ def run_punch():
     if SE_OFFLINE:
         print("WARNING: SE_OFFLINE is true.\nThis is a dry run.")
     else:
-        delay = random.randint(1, 600)
+        delay = random.randint(1, MAX_DELAY_SEC) if MAX_DELAY_SEC > 0 else 0
         time.sleep(delay)
     
     options = Options()
-    options.binary_location = "/usr/bin/chromium" 
+    options.binary_location = CHROMIUM_PATH
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1280x720")
     options.add_argument("--disable-dev-shm-usage")
     options.page_load_strategy = 'eager'
     
-    service = Service("/usr/bin/chromedriver")
+    service = Service(CHROMEDRIVER_PATH)
     driver = webdriver.Chrome(service=service, options=options)
-    wait = WebDriverWait(driver, 45) 
+    wait = WebDriverWait(driver, PAGE_TIMEOUT_SEC)
 
     try:
-        driver.get("https://timeclock.com")
+        driver.get(CLOCK_URL)
         time.sleep(15)
 
         wait.until(EC.presence_of_element_located((By.ID, "username"))).send_keys(CLOCK_USER)
@@ -130,7 +140,7 @@ def run_punch():
 
         # --- RESUME NORMAL NAVIGATION ---
         #print("Hitting company link.. ")
-        wait.until(EC.element_to_be_clickable((By.PARTIAL_LINK_TEXT, "My Company"))).click()
+        wait.until(EC.element_to_be_clickable((By.PARTIAL_LINK_TEXT, COMPANY_LINK_TEXT))).click()
         time.sleep(15)
 
         #print("Hitting favorite..")
@@ -139,7 +149,7 @@ def run_punch():
         
         #print("Hitting time clock entry..")
         time.sleep(10)
-        fav_btn = wait.until(EC.presence_of_element_located((By.ID, "FAVORITE_1")))
+        fav_btn = wait.until(EC.presence_of_element_located((By.ID, FAVORITE_ID)))
         driver.execute_script("arguments[0].click();", fav_btn)
         time.sleep(5)
 
