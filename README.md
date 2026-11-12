@@ -28,3 +28,28 @@ This project uses a robust deployment script that automatically handles OS-level
    git clone [https://github.com/buttcoffin/Clock-Bot.git](https://github.com/buttcoffin/Clock-Bot.git)
    cd Clock-Bot
 
+
+## 📱 Remote control (Telegram) — replaces cron
+
+`controller.py` is a single long-running service that punches at `PUNCH_TIMES` on `PUNCH_DAYS` and takes commands from your Telegram chat only. It makes outbound HTTPS calls to `api.telegram.org` only — no open ports.
+
+1. In Telegram, message **@BotFather** → `/newbot` → copy the token into `TELEGRAM_TOKEN` in `.env`.
+2. Send your new bot any message, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `message.chat.id` into `TELEGRAM_CHAT_ID`.
+3. Set `PUNCH_TIMES` / `PUNCH_DAYS` in `.env`, and **remove the old cron entries** (`crontab -e`).
+4. Install the service (edit the paths/user in it first):
+   ```bash
+   sudo cp clockbot-controller.service /etc/systemd/system/
+   sudo systemctl enable --now clockbot-controller
+   ```
+5. The first start is **paused**. Send `/status` to check it, then `/resume`.
+
+| Command | Effect |
+|---|---|
+| `/status` | Paused/running, skipped days, next punch |
+| `/pause`, `/resume` | Stop / restart all scheduled punches |
+| `/skip` `[today\|tomorrow\|YYYY-MM-DD]` | Skip a day (no argument = next punch day) |
+| `/unskip YYYY-MM-DD` | Undo a skip |
+| `/punch` | Punch now (still uses the random delay) |
+| `/log` | Last 15 lines of `punch.log` |
+
+Every punch reports ✅ / ❌ with its log output. If the controller was down at a punch time (reboot, outage) and comes back more than `PUNCH_GRACE_MIN` minutes late, it **won't punch late**. It messages you instead.

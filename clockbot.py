@@ -12,7 +12,8 @@ from selenium.common.exceptions import TimeoutException, StaleElementReferenceEx
 # ==========================================
 # CONFIGURATION & LOGGING
 # ==========================================
-load_dotenv("/home/user/clock-bot/.env")
+BASE = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE, ".env"))
 
 CLOCK_USER = os.getenv("CLOCK_USER")
 CLOCK_PASS = os.getenv("CLOCK_PASS")
@@ -22,7 +23,7 @@ EMAIL_PASS = os.getenv("EMAIL_PASS")
 IMAP_SERVER = "imap.gmail.com"
 SE_OFFLINE = os.getenv("SE_OFFLINE", "false").lower() == "true"
 
-sys.stdout = open('/home/user/clock-bot/punch.log', 'a', buffering=1)
+sys.stdout = open(os.path.join(BASE, "punch.log"), 'a', buffering=1)
 sys.stderr = sys.stdout
 
 # ==========================================
@@ -164,9 +165,9 @@ def run_punch():
         driver.switch_to.default_content()
 
     except Exception as e:
-        with open("/home/user/clock-bot/frame_source.html", "w", encoding="utf-8") as f:
+        with open(os.path.join(BASE, "frame_source.html"), "w", encoding="utf-8") as f:
             f.write(driver.page_source)
-        driver.save_screenshot("/home/user/clock-bot/crash_screen.png")
+        driver.save_screenshot(os.path.join(BASE, "crash_screen.png"))
         print(f"CRITICAL ERROR: {e}")
     finally:
         driver.quit()
