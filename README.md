@@ -13,10 +13,10 @@ A hardware-integrated automation service designed to run on a Raspberry Pi or De
 * **Headless Browser Automation:** Uses Selenium and Chromium to navigate the HR portal without a GUI.
 * **Automated MFA Handling:** Polls a designated inbox via IMAP to pull SMS-forwarded authentication codes.
 * **Telegram Remote Control:** Pause, resume, skip days, punch on demand, and get a ✅/❌ after every punch, all from your phone. No cron and no open ports.
-* **Safe Scheduling:** Starts paused, never punches late after a reboot or outage, and remembers skipped days.
-* **Hardware Status Display:** Waveshare e-Paper module (SPI + `lgpio`) shows the latest punch log and network status.
+* **Safe Scheduling:** random punch times inside your windows, daily hours kept at 8–8.25 and the week at 40–41, a 20–30 minute lunch, and an automatic pause if anything goes wrong.
+* **Optional Status Display:** a Waveshare e-Paper module (SPI + `lgpio`) can show the latest punch log and network status. Not needed when you use Telegram.
 * **One-File Configuration:** Everything is set in `.env`.
-* **Bulletproof Environment Provisioning:** `setup.sh` installs OS packages, compiles `liblgpio` from source if it's missing, builds an isolated virtual environment, and fetches only the e-Paper driver files it needs.
+* **Simple Provisioning:** `setup.sh` installs Chromium and builds an isolated virtual environment. `./setup.sh --display` adds the e-Paper driver bits (only the 3 Waveshare files it needs).
 
 ## 🧰 Build list
 
@@ -24,9 +24,9 @@ A hardware-integrated automation service designed to run on a Raspberry Pi or De
 
 | Part | Notes |
 |---|---|
-| **Raspberry Pi Zero 2 W** | What this project runs on day to day, headless. Any Pi with a 40-pin header should work, and so does a Debian x86_64 box if you skip the display. |
+| **Raspberry Pi 4 Model B (1GB+)** | Current home of the bot, running headless alongside RaspAP. A Pi Zero 2 W also works (it ran this project for months), but 512MB is tight for Chromium. A Debian x86_64 box works too. |
 | **microSD card, 16GB+** | A1/A2 rated if possible |
-| **Official power supply** | Pi Zero 2 W: 5V/2.5A micro-USB. Under-powered Pis cause random crashes. |
+| **Official power supply** | Pi 4: 5V/3A USB-C. Pi Zero 2 W: 5V/2.5A micro-USB. Under-powered Pis cause random crashes. |
 | **Waveshare 2.13" e-Paper HAT, V3** (250×122, black/white) | Optional. Must be **V3**, so check the sticker on the back of the panel. V4 and the color (B/C/D) versions use different drivers and won't work as-is. https://www.waveshare.com/2.13inch-e-paper-hat.htm |
 | **Network** | Ethernet or Wi-Fi with outbound HTTPS (timeclock site, IMAP, Telegram). No inbound ports needed. |
 | **Case** | Optional. Pick one with room for the HAT on the GPIO header. |
@@ -52,7 +52,8 @@ A hardware-integrated automation service designed to run on a Raspberry Pi or De
 | `eink-monitor.service` | systemd unit for the e-Paper display |
 | `eink_monitor.py` | Drives the e-Paper display (optional) |
 | `shrink.py` | Resizes `logo.png` for the display |
-| `setup.sh` | Installs dependencies, builds `venv/`, and fetches the e-Paper driver |
+| `setup.sh` | Installs Chromium, builds `venv/`; `--display` adds the e-Paper bits |
+| `requirements-display.txt` | Extra Python packages for the e-Paper display only |
 | `.env.example` | Template for all settings |
 
 ---
@@ -69,7 +70,7 @@ cd ~/clock-bot
 ./setup.sh
 ```
 
-`setup.sh` may ask for your sudo password to install packages. For the display it downloads just the three Waveshare driver files this project uses (`epd2in13_V3.py`, `epdconfig.py`, `__init__.py`) instead of Waveshare's entire repository.
+`setup.sh` installs Chromium and chromedriver if they're missing (it asks for your sudo password for that), then builds the Python environment. If you use the e-Paper display, run `./setup.sh --display` instead. That also installs the display packages and downloads just the three Waveshare driver files this project uses.
 
 ### 2. Set up MFA forwarding
 
@@ -110,11 +111,16 @@ nano .env
 | `FAVORITE_ID` | Element ID of the Time Clock Entry favorite | `FAVORITE_1` |
 | `IMAP_SERVER` | Mail server for MFA codes | `imap.gmail.com` |
 | `MFA_SUBJECT` | Subject line of the forwarded SMS emails | `SMSFW` |
-| `PUNCH_IN`, `PUNCH_OUT` | Clock-in and clock-out windows. A random time inside each is picked daily. | `07:50-08:00`, `16:10-16:20` |
-| `LUNCH_OUT`, `LUNCH_IN` | Lunch windows during **standard time** (Nov–Mar). Leave blank for no lunch punches. | `11:10-11:15`, `11:25-11:35` |
-| `LUNCH_OUT_DST`, `LUNCH_IN_DST` | Lunch windows during **daylight saving time** (Mar–Nov) | `12:10-12:15`, `12:25-12:35` |
-| `LUNCH_MIN`, `LUNCH_MAX` | Lunch length limits in minutes, measured between the real clicks | `20`, `30` |
-| `PUNCH_LEAD_MIN` | How many minutes early clockbot starts; it waits on the punch page until the exact time | `10` |
+| `PUNCH_IN` | Clock-in window. A random time inside it is picked daily. | `07:45-07:55` |
+| `PUNCH_OUT` | Clock-out window. The exact time is calculated to hit the hours rules and stays inside this window whenever possible. | `16:10-16:20` |
+| `LUNCH_OUT` | Lunch-out window during **standard time** (Nov–Mar). Leave blank for no lunch punches. | `11:05-11:20` |
+| `LUNCH_OUT_DST` | Lunch-out window during **daylight saving time** (Mar–Nov) | `12:05-12:20` |
+| `LUNCH_MIN`, `LUNCH_MAX` | Lunch length limits in minutes (unpaid), measured between the real clicks | `20`, `30` |
+| `DAY_MIN_HOURS`, `DAY_MAX_HOURS` | Net hours per day (lunch excluded) | `8`, `8.25` |
+| `WEEK_MAX_HOURS` | Weekly cap (Monday–Sunday). With 5 days of at least 8 h, the week lands at 40–41. | `41` |
+| `PUNCH_LEAD_MIN` | How many minutes early clockbot starts (leaves room for a retry); it waits on the punch page until the exact time | `15` |
+| `PUNCH_ATTEMPTS` | If something fails before the click (a page didn't load, for example), start over with a fresh browser up to this many times | `3` |
+| `PUNCH_LATE_MAX_MIN` | Never click more than this many minutes after the planned time. Fail and alert instead. | `10` |
 | `PUNCH_DAYS` | Days to punch | `mon,tue,wed,thu,fri` |
 | `PUNCH_GRACE_MIN` | How late a punch may still start (for example, after a reboot) | `5` |
 | `MAX_DELAY_SEC` | Random delay, from 1 to N seconds, used only when `clockbot.py` is run by hand or by cron. The controller uses the windows instead. | `600` |
@@ -169,12 +175,18 @@ It always starts **paused** the first time. In Telegram, send `/status` to check
 
 ## ⏰ How the schedule works
 
-* Each work day the controller picks a random time inside every window: clock in, lunch out, lunch in, clock out.
-* About `PUNCH_LEAD_MIN` minutes before each time, it starts `clockbot.py`. The bot logs in, handles MFA, and then **waits on the Punch button until the exact second** before clicking. Login time doesn't push the punch late.
-* Punches run one at a time, in order.
-* **Lunch rule:** after lunch out actually clicks, lunch in is re-picked so the break is between `LUNCH_MIN` and `LUNCH_MAX` minutes, inside the lunch-in window when possible. If lunch out ran late, the 20–30 minute rule wins over the window.
-* **DST:** lunch windows switch automatically, using `LUNCH_*_DST` during daylight saving time and `LUNCH_*` otherwise. Clock-in and clock-out windows stay the same all year.
-* **Failure safety:** if a punch fails (❌), the controller **pauses itself** so later punches can't land out of order. Fix it, punch manually if needed, then `/resume`.
+* **Each work day:** clock in is random inside `PUNCH_IN` (7:45–7:55), and lunch out is random inside `LUNCH_OUT` (11:05–11:20, or 12:05–12:20 during DST).
+* **Lunch length and clock out are calculated**, not just random:
+  * Each day nets between `DAY_MIN_HOURS` and `DAY_MAX_HOURS` (8–8.25 h), with lunch unpaid.
+  * The week never goes over `WEEK_MAX_HOURS` (41). Later days in the week leave room for at least 8 h each, so a normal 5-day week lands at 40–41 h.
+  * When you `/skip` days, each remaining day still stays at 8–8.25 h.
+  * Lunch is kept between `LUNCH_MIN` and `LUNCH_MAX` (20–30 min), with a minute of headroom.
+  * Clock out stays inside `PUNCH_OUT` (4:10–4:20) whenever that's possible. If a late punch makes it impossible, **the hours rules win** and clock out floats slightly outside.
+* **Re-solved after every punch** using the *real* click times, so a punch that lands a bit late is corrected for by the later ones.
+* About `PUNCH_LEAD_MIN` minutes before each time, it starts `clockbot.py`. The bot logs in, handles MFA, and then **waits on the Punch button until the exact second** before clicking.
+* Punches run one at a time, in order. Each day's net hours are saved, and `/status` shows today's plan and the week so far.
+* **Retries:** if a step fails before the click, the bot starts over with a fresh browser (up to `PUNCH_ATTEMPTS` times), and the log says which step failed. Once the Punch button has been clicked, it never retries.
+* **Failure safety:** the Punch button *toggles*, so one missed punch would flip every later punch that day. If a punch fails (❌), is **missed** (the Pi was off), or is **interrupted** by a reboot, the controller **pauses itself**. Check your timecard, punch manually if needed, then `/resume`.
 * If the service starts mid-day, punches that already passed are skipped, not chased.
 
 ---
@@ -206,7 +218,7 @@ It always starts **paused** the first time. In Telegram, send `/status` to check
 
 ## 🖥️ E-Paper display (optional)
 
-`eink_monitor.py` shows the time, network status, and the last few lines of `punch.log`. To put your logo on it, drop a `logo.png` in the folder and run `venv/bin/python shrink.py` once to resize it.
+Skip this section if Telegram is enough. Install with `./setup.sh --display` first. `eink_monitor.py` shows the time, network status, and the last few lines of `punch.log`. To put your logo on it, drop a `logo.png` in the folder and run `venv/bin/python shrink.py` once to resize it.
 
 To launch it at boot, install the included service (edit `User=` and the paths first if yours differ):
 

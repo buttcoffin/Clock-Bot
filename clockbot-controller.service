@@ -1,6 +1,6 @@
 [Unit]
 Description=Clock-bot Telegram controller
-After=network-online.target
+After=network-online.target time-sync.target
 Wants=network-online.target
 
 [Service]
@@ -9,6 +9,16 @@ WorkingDirectory=/home/user/clock-bot
 ExecStart=/home/user/clock-bot/venv/bin/python /home/user/clock-bot/controller.py
 Restart=always
 RestartSec=30
+# Shares the box with the router (RaspAP): keep Chromium from starving it.
+# If memory ever runs out, the kernel kills the bot/Chromium first (children
+# inherit this), never hostapd/dnsmasq. Works even with cgroup_disable=memory.
+OOMScoreAdjust=800
+# Hard caps; only enforced if the kernel has the memory cgroup enabled
+# (Raspberry Pi OS disables it by default via cgroup_disable=memory).
+MemoryHigh=500M
+MemoryMax=650M
+Nice=10
+CPUWeight=50
 
 [Install]
 WantedBy=multi-user.target

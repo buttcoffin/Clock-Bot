@@ -1,0 +1,8 @@
+# Only needed for the optional Waveshare e-Paper display (./setup.sh --display)
+colorzero==2.0
+gpiozero==2.0.1
+Jetson.GPIO==2.1.12
+lgpio==0.2.2.0
+pillow==12.1.1
+rpi-lgpio==0.6
+spidev==3.8

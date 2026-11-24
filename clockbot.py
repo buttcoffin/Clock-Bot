@@ -36,6 +36,10 @@ CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
 # random MAX_DELAY_SEC wait is skipped and the bot waits on the punch page instead.
 PUNCH_AT = float(os.getenv("PUNCH_AT", "0") or 0)
 LAST_PUNCH_FILE = os.path.join(BASE, "last_punch")
+# If a step fails before the click, start over with a fresh browser (up to this many tries)
+PUNCH_ATTEMPTS = int(os.getenv("PUNCH_ATTEMPTS", "3"))
+# Never click more than this many minutes after PUNCH_AT; fail and alert instead
+PUNCH_LATE_MAX_MIN = int(os.getenv("PUNCH_LATE_MAX_MIN", "10"))
 SE_OFFLINE = os.getenv("SE_OFFLINE", "false").lower() == "true"
 
 sys.stdout = open(os.path.join(BASE, "punch.log"), 'a', buffering=1)
@@ -91,19 +95,7 @@ def get_mfa_code():
 # ==========================================
 # MAIN BOT LOGIC
 # ==========================================
-def run_punch():
-    # --- THE SELF-CLEANING SWEEP ---
-    # Force-kill any lingering chromedriver or chromium instances to free up RAM
-    os.system("pkill -f chromedriver > /dev/null 2>&1")
-    os.system("pkill -f chromium > /dev/null 2>&1")
-    time.sleep(2) # Give the OS a brief second to flush the memory
-
-    if SE_OFFLINE:
-        print("WARNING: SE_OFFLINE is true.\nThis is a dry run.")
-    elif not PUNCH_AT:
-        delay = random.randint(1, MAX_DELAY_SEC) if MAX_DELAY_SEC > 0 else 0
-        time.sleep(delay)
-    
+def make_driver():
     options = Options()
     options.binary_location = CHROMIUM_PATH
     options.add_argument("--headless=new")
@@ -111,90 +103,142 @@ def run_punch():
     options.add_argument("--window-size=1280x720")
     options.add_argument("--disable-dev-shm-usage")
     options.page_load_strategy = 'eager'
-    
-    service = Service(CHROMEDRIVER_PATH)
-    driver = webdriver.Chrome(service=service, options=options)
+    return webdriver.Chrome(service=Service(CHROMEDRIVER_PATH), options=options)
+
+
+def kill_browsers():
+    # Force-kill any lingering chromedriver or chromium instances to free up RAM
+    os.system("pkill -f chromedriver > /dev/null 2>&1")
+    os.system("pkill -f chromium > /dev/null 2>&1")
+    time.sleep(2)  # Give the OS a brief second to flush the memory
+
+
+def punch_flow(driver, progress):
+    """Log in, open the time clock and click Punch. Updates progress["step"] as it
+    goes and sets progress["clicked"] the moment the Punch button is clicked."""
     wait = WebDriverWait(driver, PAGE_TIMEOUT_SEC)
 
+    progress["step"] = "loading login page"
+    driver.get(CLOCK_URL)
+    time.sleep(15)
+
+    progress["step"] = "logging in"
+    wait.until(EC.presence_of_element_located((By.ID, "username"))).send_keys(CLOCK_USER)
+    driver.find_element(By.ID, "password").send_keys(CLOCK_PASS)
+    driver.find_element(By.NAME, "action").click()
+
+    # --- CONDITIONAL MFA BRANCH ---
     try:
-        driver.get(CLOCK_URL)
-        time.sleep(15)
-
-        wait.until(EC.presence_of_element_located((By.ID, "username"))).send_keys(CLOCK_USER)
-        driver.find_element(By.ID, "password").send_keys(CLOCK_PASS)
+        # Use a dedicated, shorter 10-second wait.
+        # If we used the global 45-second wait, the bot would sit frozen for 45 seconds every day MFA was skipped.
+        mfa_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "code")))
+        progress["step"] = "waiting for MFA code"
+        mfa = get_mfa_code()
+        if not mfa:
+            raise Exception("New MFA code never arrived")
+        mfa_field.send_keys(mfa)
         driver.find_element(By.NAME, "action").click()
-
-        # --- CONDITIONAL MFA BRANCH ---
-        try:
-            # Use a dedicated, shorter 10-second wait. 
-            # If we used the global 45-second wait, the bot would sit frozen for 45 seconds every day MFA was skipped.
-            mfa_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "code")))
-            #print("MFA DETECTED. PULLING CODE.")
-
-            mfa = get_mfa_code()
-            if not mfa:
-                raise Exception("ERROR: New MFA code never arrived!")
-
-            mfa_field.send_keys(mfa)
-            driver.find_element(By.NAME, "action").click()
-            time.sleep(10)
-            
-        except TimeoutException:
-            # If the 10 seconds pass and no "code" box appears, Python executes this block instead of crashing.
-            time.sleep(10)
-
-        # --- RESUME NORMAL NAVIGATION ---
-        #print("Hitting company link.. ")
-        wait.until(EC.element_to_be_clickable((By.PARTIAL_LINK_TEXT, COMPANY_LINK_TEXT))).click()
-        time.sleep(15)
-
-        #print("Hitting favorite..")
-        #wait.until(EC.element_to_be_clickable((By.LINK_TEXT, "Time Clock Entry"))).click()
-        wait.until(EC.element_to_be_clickable((By.ID, "nav-menu-button"))).click()
-        
-        #print("Hitting time clock entry..")
         time.sleep(10)
-        fav_btn = wait.until(EC.presence_of_element_located((By.ID, FAVORITE_ID)))
-        driver.execute_script("arguments[0].click();", fav_btn)
-        time.sleep(5)
+    except TimeoutException:
+        # If the 10 seconds pass and no "code" box appears, carry on without MFA.
+        time.sleep(10)
 
-        #print("Opening content frame..")
-        wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "ContentFrame")))
+    progress["step"] = "opening company link"
+    wait.until(EC.element_to_be_clickable((By.PARTIAL_LINK_TEXT, COMPANY_LINK_TEXT))).click()
+    time.sleep(15)
 
-        if PUNCH_AT:
-            wait.until(EC.element_to_be_clickable((By.ID, "btnPunch")))
-            remaining = PUNCH_AT - time.time()
-            if remaining > 0:
-                print(f"Ready. Punching at {datetime.fromtimestamp(PUNCH_AT).strftime('%-I:%M:%S %p')}")
-                time.sleep(remaining)
+    progress["step"] = "opening nav menu"
+    wait.until(EC.element_to_be_clickable((By.ID, "nav-menu-button"))).click()
+    time.sleep(10)
 
-        for attempt in range(3):
-            try:
-                punch_btn = wait.until(EC.element_to_be_clickable((By.ID, "btnPunch")))
-                
-                if SE_OFFLINE:
-                    print("SE_OFFLINE ACTIVE\nSafely skipping the final punch.")
-                else:
-                    punch_btn.click()
-                    with open(LAST_PUNCH_FILE, "w") as f:
-                        f.write(str(time.time()))
-                    punch_time = datetime.now().strftime("%-I:%M %p")
-                    print(f"✅ CLOCK PUNCHED AT {punch_time}!")
-                break
-                
-            except StaleElementReferenceException:
-                print(f"DOM Refresh detected inside frame!\nRetrying... (Attempt {attempt + 1}/3)")
-                time.sleep(1)
-                
-        driver.switch_to.default_content()
+    progress["step"] = "opening Time Clock Entry"
+    fav_btn = wait.until(EC.presence_of_element_located((By.ID, FAVORITE_ID)))
+    driver.execute_script("arguments[0].click();", fav_btn)
+    time.sleep(5)
 
-    except Exception as e:
+    progress["step"] = "loading time clock frame"
+    wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "ContentFrame")))
+
+    progress["step"] = "finding Punch button"
+    wait.until(EC.element_to_be_clickable((By.ID, "btnPunch")))
+    if PUNCH_AT:
+        remaining = PUNCH_AT - time.time()
+        if remaining > 0:
+            progress["step"] = "waiting for punch time"
+            print(f"Ready. Punching at {datetime.fromtimestamp(PUNCH_AT).strftime('%-I:%M:%S %p')}")
+            time.sleep(remaining)
+        elif -remaining > PUNCH_LATE_MAX_MIN * 60:
+            raise Exception(f"Too late: more than {PUNCH_LATE_MAX_MIN} min past the planned time, not punching")
+
+    progress["step"] = "clicking Punch"
+    for attempt in range(3):
+        try:
+            punch_btn = wait.until(EC.element_to_be_clickable((By.ID, "btnPunch")))
+            if SE_OFFLINE:
+                print("SE_OFFLINE ACTIVE\nSafely skipping the final punch.")
+            else:
+                punch_btn.click()
+                progress["clicked"] = True
+                with open(LAST_PUNCH_FILE, "w") as f:
+                    f.write(str(time.time()))
+                print(f"✅ CLOCK PUNCHED AT {datetime.now().strftime('%-I:%M %p')}!")
+            break
+        except StaleElementReferenceException:
+            print(f"DOM refresh in frame, retrying ({attempt + 1}/3)")
+            time.sleep(1)
+    else:
+        raise Exception("Punch button kept going stale")
+
+    driver.switch_to.default_content()
+
+
+def save_crash(driver):
+    try:
         with open(os.path.join(BASE, "frame_source.html"), "w", encoding="utf-8") as f:
             f.write(driver.page_source)
         driver.save_screenshot(os.path.join(BASE, "crash_screen.png"))
-        print(f"CRITICAL ERROR: {e}")
-    finally:
-        driver.quit()
+    except Exception:
+        pass
+
+
+def run_punch():
+    kill_browsers()
+
+    if SE_OFFLINE:
+        print("WARNING: SE_OFFLINE is true.\nThis is a dry run.")
+    elif not PUNCH_AT:
+        delay = random.randint(1, MAX_DELAY_SEC) if MAX_DELAY_SEC > 0 else 0
+        time.sleep(delay)
+
+    for n in range(1, PUNCH_ATTEMPTS + 1):
+        progress = {"step": "starting browser", "clicked": False}
+        driver = None
+        try:
+            driver = make_driver()
+            punch_flow(driver, progress)
+            return
+        except Exception as e:
+            if driver:
+                save_crash(driver)
+            msg = str(e).strip().splitlines()[0] if str(e).strip() else ""
+            reason = f"{type(e).__name__} while {progress['step']}" + (f": {msg}" if msg and not msg.startswith("Message:") else "")
+            if progress["clicked"]:
+                # The punch already went through; never retry past this point.
+                print(f"Note: error after punching ({reason})")
+                return
+            out_of_time = PUNCH_AT and time.time() > PUNCH_AT + PUNCH_LATE_MAX_MIN * 60
+            if n < PUNCH_ATTEMPTS and not out_of_time and "Too late" not in msg:
+                print(f"Attempt {n} failed: {reason}. Retrying...")
+                continue
+            print(f"CRITICAL ERROR: {reason}")
+            return
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            kill_browsers()
 
 if __name__ == "__main__":
     run_punch()
